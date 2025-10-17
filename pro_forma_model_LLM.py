@@ -5,12 +5,21 @@ from ollama import chat
 import pandas as pd
 import numpy_financial as npf
 from tabulate import tabulate
-import json
 
-# -------------------------
-# Pydantic schema for summary
-# -------------------------
 class RealEstateSummary(BaseModel):
+    # Monthly Cash Flow Data
+    monthly_cash_flows: Optional[List[dict]] = Field(default_factory=list)  # List of monthly cash flow data
+    gross_potential_rent_monthly: Optional[List[float]] = Field(default_factory=list)
+    vacancy_monthly: Optional[List[float]] = Field(default_factory=list)
+    bad_debt_monthly: Optional[List[float]] = Field(default_factory=list)
+    other_income_monthly: Optional[List[float]] = Field(default_factory=list)
+    effective_gross_revenue_monthly: Optional[List[float]] = Field(default_factory=list)
+    total_expenses_monthly: Optional[List[float]] = Field(default_factory=list)
+    net_operating_income_monthly: Optional[List[float]] = Field(default_factory=list)
+    interest_payment_monthly: Optional[List[float]] = Field(default_factory=list)
+    principal_payment_monthly: Optional[List[float]] = Field(default_factory=list)
+    cash_flow_after_debt_service_monthly: Optional[List[float]] = Field(default_factory=list)
+    
     # Acquisition & costs
     purchase_price: Optional[float]
     closing_costs: Optional[float]
@@ -54,65 +63,75 @@ class RealEstateSummary(BaseModel):
     gp_promote_pct: Optional[float]
     gp_equity_split: Optional[float]
 
-    class Config:
-        # allow population by both alias and field name
-        allow_population_by_field_name = True
+    model_config = {"validate_by_name": True}
 
 
 # -------------------------
 # Ollama helper to parse messy CSV into validated pydantic model
 # -------------------------
 def extract_summary_with_ollama(csv_path: str, model_name: str = "llama3.1") -> RealEstateSummary:
-    csv_text = open(csv_path, "r", encoding="utf-8", errors="ignore").read()
-    prompt = f"""
-You are a data extractor for commercial real estate pro forma CSVs.
-Read the CSV text (it can contain merged cells or headers in different columns).
-Return ONLY a JSON object that conforms to the following schema keys. Use numbers for numeric fields and arrays for multi-year growth:
-- purchase_price
-- closing_costs
-- acquisition_fee
-- upfront_wc (or upfront_working_capital)
-- construction_budget (or total_construction_budget)
-- hold_period_months
-- loan_amount
-- loan_fee_pct
-- loan_fee_amount
-- interest_rate_index
-- interest_rate_spread
-- interest_rate
-- io_period (Interest Only Period in months)
-- amortization_years
-- lp_equity
-- gp_equity
-- market_rent_growth (array [yr1, yr2, after])
-- annual_expense_growth
-- property_management_fee_pct
-- initial_gpr
-- initial_other_income
-- initial_vacancy_pct
-- bad_debt_pct
-- initial_monthly_expenses
-- exit_cap_rate
-- sale_costs_pct
-- preferred_return
-- gp_promote_pct
-- gp_equity_split
+    """Extract monthly cash flow data from CSV using Ollama or fallback to direct parsing."""
+    try:
+        csv_text = open(csv_path, "r", encoding="utf-8", errors="ignore").read()
+        prompt = f"""
+You are a data extractor for commercial real estate monthly cash flow CSVs.
+Read the CSV text and extract monthly cash flow data from the Monthly CF sheet.
+Return ONLY a JSON object that conforms to the following schema keys. Use numbers for numeric fields and arrays for monthly data:
 
-If you cannot find a value, put null. Standardize common label variations (e.g., "Total Const. Budget" -> "construction_budget").
+LP EQUITY AND GP EQUITY ARE FOUND IN THE WATERFALL SHEET.
+
+(Advise: 'LP'='Limited Partner' and 'GP'='General Partner')
+
+MONTHLY CASH FLOW DATA:
+gross_potential_rent_monthly (“Gross Potential Rent”, “GPR”)
+vacancy_monthly (“Physical Vacancy”, “Vacancy Loss”, negative)
+bad_debt_monthly (“Bad Debt”, “Credit Loss”, negative)
+other_income_monthly (“Total Other Income”, “Other Income”)
+effective_gross_revenue_monthly (“Effective Gross Revenue”, “EGR”)
+total_expenses_monthly (“Total Expenses”, “Operating Expenses”, negative)
+net_operating_income_monthly (“Net Operating Income”, “NOI”)
+interest_payment_monthly (“Interest Payment”, “Debt Interest”, negative)
+principal_payment_monthly (“Principal Payment”, “Debt Principal”, negative)
+cash_flow_after_debt_service_monthly (“Cash Flow After Debt Service”, “CFADS”)
+
+ACQUISITION & COSTS:
+purchase_price (“Purchase Price”, “Acquisition Price”, “Property Purchase”)
+closing_costs (“Closing Costs”, “Transaction Costs”)
+acquisition_fee (“Acquisition Fee”, “Sponsor Fee”)
+upfront_wc (“Working Capital Contributed”, “Initial Working Capital”, “Upfront WC”)
+construction_budget (“Construction Expenses”, “Total Construction Budget”, “CapEx Budget”)
+hold_period_months (“Hold Period”, “Investment Duration”)
+LOAN INFORMATION:
+loan_amount (“Loan Funding”, “Debt Proceeds”, “Senior Loan”)
+loan_fee_amount (“Loan Fees”, “Financing Fees”, “Origination Fees”)
+interest_rate (“Interest Rate”, “Loan Rate”)
+io_period (“Interest-Only Period”, “IO Period”)
+amortization_years (“Amortization Term”, “Loan Amortization”)
+
+EQUITY & SALE:
+project_irr (“Project IRR”, “Project-level IRR”)
+lp_equity (“LP Equity”, “Limited Partner Equity”, “Investor Equity”)
+gp_equity (“GP Equity”, “General Partner Equity”, “Sponsor Equity”)
+exit_cap_rate (“Exit Cap Rate”, “Terminal Cap Rate”) (NOT TO BE CONFUSED WITH GOING-IN CAP RATE OR OTHER CAP RATES)
+sale_costs_pct (“Costs of Sale”, “Disposition Costs”, “Sales Costs Percentage”)
+
+If you cannot find a value, put null. Extract monthly data as arrays of numbers.
 CSV:
-{csv_text[:4000]}
+{csv_text[:6000]}
 """
-    response = chat(
-        messages=[{"role": "user", "content": prompt}],
-        model=model_name,
-        format=RealEstateSummary.model_json_schema()
-    )
+        response = chat(
+            messages=[{"role": "user", "content": prompt}],
+            model=model_name,
+            format=RealEstateSummary.model_json_schema()
+        )
 
-    # Ollama returns JSON in response.message.content per your example
-    raw = response.message.content
-    # Validate/parse into the pydantic model
-    summary_model = RealEstateSummary.model_validate_json(raw)
-    return summary_model
+        # Ollama returns JSON in response.message.content per your example
+        raw = response.message.content
+        # Validate/parse into the pydantic model
+        summary_model = RealEstateSummary.model_validate_json(raw)
+        return summary_model
+    except Exception as e:
+        raise Exception(f"Ollama extraction failed: {e}")
 
 def clean_currency(df):
     """Strip $, commas, and parentheses from all string cells and convert to float."""
@@ -125,16 +144,21 @@ def clean_currency(df):
                 .str.replace(r'[\$,]', '', regex=True)
                 .str.replace(r'\((.*?)\)', r'-\1', regex=True)
             )
-            df[col] = pd.to_numeric(df[col], errors='ignore')
+            # Convert to numeric, keeping non-numeric values as strings
+            try:
+                df[col] = pd.to_numeric(df[col])
+            except (ValueError, TypeError):
+                # Keep non-numeric values as strings if conversion fails
+                pass
     return df
 
 class RealEstateProForma:
     def __init__(self, summary_model: RealEstateSummary, mcf_path: str, waterfall_path: str):
         # store raw sources
         self.summary_model = summary_model
-        self.mcf_df_raw = pd.read_csv(mcf_path, header=None)
+        self.mcf_df_raw = pd.read_excel(mcf_path, header=None)
         self.mcf_df_raw = clean_currency(self.mcf_df_raw)
-        self.waterfall_df = pd.read_csv(waterfall_path, header=None)
+        self.waterfall_df = pd.read_excel(waterfall_path, header=None)
         self.waterfall_df = clean_currency(self.waterfall_df)
 
         # placeholders
@@ -149,6 +173,26 @@ class RealEstateProForma:
     @classmethod
     def from_summary_model(cls, summary_model: RealEstateSummary, mcf_path: str, waterfall_path: str):
         return cls(summary_model, mcf_path, waterfall_path)
+    
+    @classmethod
+    def from_dataframes(cls, summary_model: RealEstateSummary, mcf_df: pd.DataFrame, waterfall_df: pd.DataFrame):
+        """Create instance from DataFrames instead of file paths."""
+        instance = cls.__new__(cls)
+        instance.summary_model = summary_model
+        instance.mcf_df_raw = mcf_df.copy()
+        instance.mcf_df_raw = clean_currency(instance.mcf_df_raw)
+        instance.waterfall_df = waterfall_df.copy()
+        instance.waterfall_df = clean_currency(instance.waterfall_df)
+        
+        # placeholders
+        instance.sources_uses_df = None
+        instance.sale_metrics_df = None
+        instance.return_metrics_df = None
+        instance.waterfall_breakdown_df = None
+        instance.mcf_calculated_df = None
+        
+        instance._load_assumptions_from_model()
+        return instance
 
     def _get_model_value(self, attr: str, default=None):
         v = getattr(self.summary_model, attr, None)
@@ -190,6 +234,9 @@ class RealEstateProForma:
         self.lp_equity = self._get_model_value("lp_equity", 0.0)
         self.gp_equity = self._get_model_value("gp_equity", 0.0)
         self.total_equity = (self.lp_equity or 0.0) + (self.gp_equity or 0.0)
+
+        # Load monthly cash flow data if available
+        self._load_monthly_cash_flow_data()
 
         # Revenue & Expense from summary model if present, otherwise fall back to raw MCF
         self.initial_gpr = self._get_model_value("initial_gpr", None)
@@ -249,11 +296,25 @@ class RealEstateProForma:
         self.mgmt_fee_pct = float(self._get_model_value("property_management_fee_pct", 0.03))
 
         # Sale and waterfall
-        self.exit_cap_rate = float(self._get_model_value("exit_cap_rate", 0.06))
+        self.exit_cap_rate = float(self._get_model_value("exit_cap_rate", 0.01))
         self.sale_costs_pct = float(self._get_model_value("sale_costs_pct", 0.01))
         self.pref_return = float(self._get_model_value("preferred_return", 0.08))
         self.gp_promote_pct = float(self._get_model_value("gp_promote_pct", 0.0))
         self.gp_equity_split = float(self._get_model_value("gp_equity_split", 0.0))
+
+    def _load_monthly_cash_flow_data(self):
+        """Load monthly cash flow data from the model if available."""
+        # Store monthly data from the model
+        self.gross_potential_rent_monthly = self._get_model_value("gross_potential_rent_monthly", [])
+        self.vacancy_monthly = self._get_model_value("vacancy_monthly", [])
+        self.bad_debt_monthly = self._get_model_value("bad_debt_monthly", [])
+        self.other_income_monthly = self._get_model_value("other_income_monthly", [])
+        self.effective_gross_revenue_monthly = self._get_model_value("effective_gross_revenue_monthly", [])
+        self.total_expenses_monthly = self._get_model_value("total_expenses_monthly", [])
+        self.net_operating_income_monthly = self._get_model_value("net_operating_income_monthly", [])
+        self.interest_payment_monthly = self._get_model_value("interest_payment_monthly", [])
+        self.principal_payment_monthly = self._get_model_value("principal_payment_monthly", [])
+        self.cash_flow_after_debt_service_monthly = self._get_model_value("cash_flow_after_debt_service_monthly", [])
 
     # --- keep the rest of your original methods, slightly adapted to reference these attributes ---
     def run_model(self):
@@ -263,82 +324,110 @@ class RealEstateProForma:
         self._build_output_tables()
 
     def _calculate_monthly_cash_flows(self):
-        months = list(range(1, self.hold_period_months + 1))
-        gpr_list, vacancy_list, bad_debt_list, other_income_list, egr_list = [], [], [], [], []
-        expenses_list, noi_list, interest_list, principal_list, cfa_ds_list = [], [], [], [], []
-
-        loan_balance = self.loan_amount or 0.0
-        current_gpr = self.initial_gpr or 0.0
-        current_other_income = self.initial_other_income or 0.0
-        current_expenses = self.initial_monthly_expenses or 0.0
-
-        for m in months:
-            year = (m - 1) // 12 + 1
-            if m > 1:
-                if year == 1:
-                    growth_rate = (1 + (self.annual_rent_growth_yr1 or 0.0))**(1/12)
-                elif year == 2:
-                    growth_rate = (1 + (self.annual_rent_growth_yr2 or 0.0))**(1/12)
-                else:
-                    growth_rate = (1 + (self.annual_rent_growth_after or 0.0))**(1/12)
-                current_gpr *= growth_rate
-                current_other_income *= growth_rate
-
-            gpr_list.append(current_gpr)
-            other_income_list.append(current_other_income)
-
-            vacancy = current_gpr * (self.initial_vacancy_pct or 0.0)
-            bad_debt = current_gpr * (self.bad_debt_pct or 0.0)
-            vacancy_list.append(-vacancy)
-            bad_debt_list.append(-bad_debt)
-
-            egr = current_gpr - vacancy - bad_debt + current_other_income
-            egr_list.append(egr)
-
-            if m > 1 and (m - 1) % 12 == 0:
-                current_expenses *= (1 + (self.annual_expense_growth or 0.0))
-
-            mgmt_fee = egr * (self.mgmt_fee_pct or 0.0) / 12
-            total_expenses = (current_expenses - (self.initial_monthly_expenses * ((self.mgmt_fee_pct or 0.0)/12))) + mgmt_fee
-            expenses_list.append(-total_expenses)
-
-            noi = egr - total_expenses
-            noi_list.append(noi)
-
-            interest = 0.0
-            principal = 0.0
-            if m <= (self.io_period or 0):
-                interest = loan_balance * (self.interest_rate or 0.0) / 12
+        # Check if we have monthly data from the model
+        if (self.gross_potential_rent_monthly and 
+            self.net_operating_income_monthly and 
+            self.cash_flow_after_debt_service_monthly):
+            # Use the monthly data from the model
+            months = list(range(0, len(self.gross_potential_rent_monthly)))
+            
+            self.mcf_calculated_df = pd.DataFrame({
+                'Month': months,
+                'Gross Potential Rent': self.gross_potential_rent_monthly,
+                'Vacancy': self.vacancy_monthly if self.vacancy_monthly else [0] * len(months),
+                'Bad Debt': self.bad_debt_monthly if self.bad_debt_monthly else [0] * len(months),
+                'Other Income': self.other_income_monthly if self.other_income_monthly else [0] * len(months),
+                'Effective Gross Revenue': self.effective_gross_revenue_monthly if self.effective_gross_revenue_monthly else [0] * len(months),
+                'Total Operating Expenses': self.total_expenses_monthly if self.total_expenses_monthly else [0] * len(months),
+                'Net Operating Income': self.net_operating_income_monthly,
+                'Interest Payment': self.interest_payment_monthly if self.interest_payment_monthly else [0] * len(months),
+                'Principal Payment': self.principal_payment_monthly if self.principal_payment_monthly else [0] * len(months),
+                'Cash Flow After Debt Service': self.cash_flow_after_debt_service_monthly
+            })
+            
+            # Calculate ending loan balance from principal payments
+            if self.principal_payment_monthly:
+                self.ending_loan_balance = (self.loan_amount or 0.0) + sum(self.principal_payment_monthly)
             else:
-                pmt = -npf.pmt((self.interest_rate or 0.0) / 12, (self.amortization_years or 30) * 12, loan_balance)
-                # ipmt/ppmt requires integer period input; use (m - io_period)
-                period = m - (self.io_period or 0)
-                try:
-                    interest = npf.ipmt((self.interest_rate or 0.0) / 12, period, (self.amortization_years or 30) * 12, loan_balance)
-                    principal = npf.ppmt((self.interest_rate or 0.0) / 12, period, (self.amortization_years or 30) * 12, loan_balance)
-                    loan_balance += principal  # principal is negative, so this reduces the balance
-                except Exception:
+                self.ending_loan_balance = self.loan_amount or 0.0
+        else:
+            # Fall back to calculated monthly cash flows
+            months = list(range(1, self.hold_period_months + 1))
+            gpr_list, vacancy_list, bad_debt_list, other_income_list, egr_list = [], [], [], [], []
+            expenses_list, noi_list, interest_list, principal_list, cfa_ds_list = [], [], [], [], []
+
+            loan_balance = self.loan_amount or 0.0
+            current_gpr = self.initial_gpr or 0.0
+            current_other_income = self.initial_other_income or 0.0
+            current_expenses = self.initial_monthly_expenses or 0.0
+
+            for m in months:
+                year = (m - 1) // 12 + 1
+                if m > 1:
+                    if year == 1:
+                        growth_rate = (1 + (self.annual_rent_growth_yr1 or 0.0))**(1/12)
+                    elif year == 2:
+                        growth_rate = (1 + (self.annual_rent_growth_yr2 or 0.0))**(1/12)
+                    else:
+                        growth_rate = (1 + (self.annual_rent_growth_after or 0.0))**(1/12)
+                    current_gpr *= growth_rate
+                    current_other_income *= growth_rate
+
+                gpr_list.append(current_gpr)
+                other_income_list.append(current_other_income)
+
+                vacancy = current_gpr * (self.initial_vacancy_pct or 0.0)
+                bad_debt = current_gpr * (self.bad_debt_pct or 0.0)
+                vacancy_list.append(-vacancy)
+                bad_debt_list.append(-bad_debt)
+
+                egr = current_gpr - vacancy - bad_debt + current_other_income
+                egr_list.append(egr)
+
+                if m > 1 and (m - 1) % 12 == 0:
+                    current_expenses *= (1 + (self.annual_expense_growth or 0.0))
+
+                mgmt_fee = egr * (self.mgmt_fee_pct or 0.0) / 12
+                total_expenses = (current_expenses - (self.initial_monthly_expenses * ((self.mgmt_fee_pct or 0.0)/12))) + mgmt_fee
+                expenses_list.append(-total_expenses)
+
+                noi = egr - total_expenses
+                noi_list.append(noi)
+
+                interest = 0.0
+                principal = 0.0
+                if m <= (self.io_period or 0):
                     interest = loan_balance * (self.interest_rate or 0.0) / 12
+                else:
+                    pmt = -npf.pmt((self.interest_rate or 0.0) / 12, (self.amortization_years or 30) * 12, loan_balance)
+                    # ipmt/ppmt requires integer period input; use (m - io_period)
+                    period = m - (self.io_period or 0)
+                    try:
+                        interest = npf.ipmt((self.interest_rate or 0.0) / 12, period, (self.amortization_years or 30) * 12, loan_balance)
+                        principal = npf.ppmt((self.interest_rate or 0.0) / 12, period, (self.amortization_years or 30) * 12, loan_balance)
+                        loan_balance += principal  # principal is negative, so this reduces the balance
+                    except Exception:
+                        interest = loan_balance * (self.interest_rate or 0.0) / 12
 
-            interest_list.append(interest)
-            principal_list.append(principal)
-            cfa_ds_list.append(noi + interest + principal)
+                interest_list.append(interest)
+                principal_list.append(principal)
+                cfa_ds_list.append(noi + interest + principal)
 
-        self.ending_loan_balance = loan_balance
+            self.ending_loan_balance = loan_balance
 
-        self.mcf_calculated_df = pd.DataFrame({
-            'Month': months,
-            'Gross Potential Rent': gpr_list,
-            'Vacancy': vacancy_list,
-            'Bad Debt': bad_debt_list,
-            'Other Income': other_income_list,
-            'Effective Gross Revenue': egr_list,
-            'Total Operating Expenses': expenses_list,
-            'Net Operating Income': noi_list,
-            'Interest Payment': interest_list,
-            'Principal Payment': principal_list,
-            'Cash Flow After Debt Service': cfa_ds_list
-        })
+            self.mcf_calculated_df = pd.DataFrame({
+                'Month': months,
+                'Gross Potential Rent': gpr_list,
+                'Vacancy': vacancy_list,
+                'Bad Debt': bad_debt_list,
+                'Other Income': other_income_list,
+                'Effective Gross Revenue': egr_list,
+                'Total Operating Expenses': expenses_list,
+                'Net Operating Income': noi_list,
+                'Interest Payment': interest_list,
+                'Principal Payment': principal_list,
+                'Cash Flow After Debt Service': cfa_ds_list
+            })
 
     def _calculate_sale_and_exit_metrics(self):
         # Use exit T12 NOI
@@ -364,7 +453,9 @@ class RealEstateProForma:
             self.project_irr = 0.0
 
         try:
-            self.project_em = sum(cf for cf in levered_cfs if cf > 0) / abs(initial_investment) if initial_investment != 0 else 0.0
+            num = sum(cf for cf in levered_cfs if cf > 0)
+            denom = abs(sum(cf for cf in levered_cfs if cf < 0))
+            self.project_em = num / denom if denom != 0 else 0.0
         except Exception:
             self.project_em = 0.0
 
@@ -410,7 +501,6 @@ class RealEstateProForma:
             ]
         })
 
-        # Save both tables — previously you stored a single DataFrame; now store separately
         self.sources_uses_df = sources
         self.uses_df = uses
 
@@ -465,43 +555,13 @@ class RealEstateProForma:
         })
 
 
-    def display_outputs(self):
-        print("## Sources and Uses Summary")
-        print(tabulate(self.sources_uses_df, headers='keys', tablefmt='pipe', showindex=False, numalign="right", stralign="left", floatfmt=",.0f"))
-        print("\n" + "="*80 + "\n")
-
-        print("## Sale Details and Exit Metrics")
-        formatted_sale = self.sale_metrics_df.copy()
-        formatted_sale.loc[formatted_sale['Metric']=='Exit Cap Rate','Value'] = formatted_sale.loc[formatted_sale['Metric']=='Exit Cap Rate','Value'] * 100
-        formatted_sale['Value'] = formatted_sale.apply(lambda row: f"{row['Value']:.2f}%" if row['Metric']=='Exit Cap Rate' else f"${row['Value']:,.0f}", axis=1)
-        print(tabulate(formatted_sale, headers='keys', tablefmt='pipe', showindex=False, numalign="right", stralign="left"))
-        print("\n" + "="*80 + "\n")
-
-        print("## Project-Level Return Metrics")
-        formatted_returns = self.return_metrics_df.copy()
-        formatted_returns['Value'] = formatted_returns['Value'].apply(lambda x: f"{x:.2%}" if 'IRR' in x or 'Return' in x else f"{x:.2f}x")
-        print(tabulate(formatted_returns, headers='keys', tablefmt='pipe', showindex=False, numalign="right", stralign="left"))
-        print("\n" + "="*80 + "\n")
-
-        print("## Waterfall Breakdown")
-        print(tabulate(self.waterfall_breakdown_df, headers='keys', tablefmt='pipe', showindex=False, numalign="right", stralign="left", floatfmt=",.0f"))
-        print("\n" + "="*80 + "\n")
-
-        print("## Monthly Cash Flows (First 12 Months)")
-        print(tabulate(self.mcf_calculated_df.head(12), headers='keys', tablefmt='pipe', showindex=False, numalign="right", floatfmt=",.0f"))
-
-
-# -------------------------
-# Example usage
-# -------------------------
 if __name__ == "__main__":
-    SUMMARY_FILE = 'The+Landing+at+Avila+Acquisition+Model.xlsx - Summary.csv'
     MCF_FILE = 'The+Landing+at+Avila+Acquisition+Model.xlsx - Monthly CF.csv'
     WATERFALL_FILE = 'The+Landing+at+Avila+Acquisition+Model.xlsx - Waterfall.csv'
 
-    # 1) Use Ollama + pydantic schema to extract a normalized JSON summary
-    print("Extracting normalized summary with ollama...")
-    summary_model = extract_summary_with_ollama(SUMMARY_FILE, model_name="llama3.1")
+    # 1) Use Ollama + pydantic schema to extract monthly cash flow data
+    print("Extracting monthly cash flow data with ollama...")
+    summary_model = extract_summary_with_ollama(MCF_FILE, model_name="llama3.1")
 
     # 2) Build the pro forma from the validated model
     pro_forma = RealEstateProForma.from_summary_model(summary_model, MCF_FILE, WATERFALL_FILE)
