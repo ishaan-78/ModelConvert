@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from pro_forma_model_LLM import extract_summary_with_ollama, RealEstateProForma, RealEstateSummary, clean_currency
+# from pro_forma_model_LLM import extract_summary_with_ollama, RealEstateProForma, RealEstateSummary, clean_currency
+from pro_forma_model_LLM import extract_summary_with_azure_from_text, RealEstateProForma, RealEstateSummary, clean_currency
 import plotly.express as px
 import plotly.graph_objects as go
 

@@ -1,10 +1,11 @@
 # file: proforma_with_ollama.py
 from typing import Optional, List
 from pydantic import BaseModel, Field
-from ollama import chat
+# from ollama import chat
 import pandas as pd
 import numpy_financial as npf
 from tabulate import tabulate
+from openai import AzureOpenAI
 
 class RealEstateSummary(BaseModel):
     # Monthly Cash Flow Data
@@ -69,69 +70,145 @@ class RealEstateSummary(BaseModel):
 # -------------------------
 # Ollama helper to parse messy CSV into validated pydantic model
 # -------------------------
-def extract_summary_with_ollama(csv_path: str, model_name: str = "llama3.1") -> RealEstateSummary:
-    """Extract monthly cash flow data from CSV using Ollama or fallback to direct parsing."""
-    try:
-        csv_text = open(csv_path, "r", encoding="utf-8", errors="ignore").read()
-        prompt = f"""
+# def extract_summary_with_ollama(csv_path: str, model_name: str = "llama3.1") -> RealEstateSummary:
+#     """Extract monthly cash flow data from CSV using Ollama or fallback to direct parsing."""
+#     try:
+#         csv_text = open(csv_path, "r", encoding="utf-8", errors="ignore").read()
+#         prompt = f"""
+# You are a data extractor for commercial real estate monthly cash flow CSVs.
+# Read the CSV text and extract monthly cash flow data from the Monthly CF sheet.
+# Return ONLY a JSON object that conforms to the following schema keys. Use numbers for numeric fields and arrays for monthly data:
+
+# LP EQUITY AND GP EQUITY ARE FOUND IN THE WATERFALL SHEET.
+
+# (Advise: 'LP'='Limited Partner' and 'GP'='General Partner')
+
+# MONTHLY CASH FLOW DATA:
+# gross_potential_rent_monthly (“Gross Potential Rent”, “GPR”)
+# vacancy_monthly (“Physical Vacancy”, “Vacancy Loss”, negative)
+# bad_debt_monthly (“Bad Debt”, “Credit Loss”, negative)
+# other_income_monthly (“Total Other Income”, “Other Income”)
+# effective_gross_revenue_monthly (“Effective Gross Revenue”, “EGR”)
+# total_expenses_monthly (“Total Expenses”, “Operating Expenses”, negative)
+# net_operating_income_monthly (“Net Operating Income”, “NOI”)
+# interest_payment_monthly (“Interest Payment”, “Debt Interest”, negative)
+# principal_payment_monthly (“Principal Payment”, “Debt Principal”, negative)
+# cash_flow_after_debt_service_monthly (“Cash Flow After Debt Service”, “CFADS”)
+
+# ACQUISITION & COSTS:
+# purchase_price (“Purchase Price”, “Acquisition Price”, “Property Purchase”)
+# closing_costs (“Closing Costs”, “Transaction Costs”)
+# acquisition_fee (“Acquisition Fee”, “Sponsor Fee”)
+# upfront_wc (“Working Capital Contributed”, “Initial Working Capital”, “Upfront WC”)
+# construction_budget (“Construction Expenses”, “Total Construction Budget”, “CapEx Budget”)
+# hold_period_months (“Hold Period”, “Investment Duration”)
+# LOAN INFORMATION:
+# loan_amount (“Loan Funding”, “Debt Proceeds”, “Senior Loan”)
+# loan_fee_amount (“Loan Fees”, “Financing Fees”, “Origination Fees”)
+# interest_rate (“Interest Rate”, “Loan Rate”)
+# io_period (“Interest-Only Period”, “IO Period”)
+# amortization_years (“Amortization Term”, “Loan Amortization”)
+
+# EQUITY & SALE:
+# project_irr (“Project IRR”, “Project-level IRR”)
+# lp_equity (“LP Equity”, “Limited Partner Equity”, “Investor Equity”)
+# gp_equity (“GP Equity”, “General Partner Equity”, “Sponsor Equity”)
+# exit_cap_rate (“Exit Cap Rate”, “Terminal Cap Rate”) (NOT TO BE CONFUSED WITH GOING-IN CAP RATE OR OTHER CAP RATES)
+# sale_costs_pct (“Costs of Sale”, “Disposition Costs”, “Sales Costs Percentage”)
+
+# If you cannot find a value, put null. Extract monthly data as arrays of numbers.
+# CSV:
+# {csv_text[:6000]}
+# """
+#         response = chat(
+#             messages=[{"role": "user", "content": prompt}],
+#             model=model_name,
+#             format=RealEstateSummary.model_json_schema()
+#         )
+
+#         # Ollama returns JSON in response.message.content per your example
+#         raw = response.message.content
+#         # Validate/parse into the pydantic model
+#         summary_model = RealEstateSummary.model_validate_json(raw)
+#         return summary_model
+#     except Exception as e:
+#         raise Exception(f"Ollama extraction failed: {e}")
+    
+
+def extract_summary_with_azure_from_text(csv_text: str) -> RealEstateSummary:
+    """
+    Use Azure OpenAI (via openai.OpenAI client) to parse CSV text into the RealEstateSummary JSON.
+    Assumes Streamlit (or environment) has the Azure secrets set:
+      - AZURE_OPENAI_API_KEY
+      - AZURE_OPENAI_ENDPOINT  (e.g. https://your-resource-name.openai.azure.com)
+      - AZURE_OPENAI_DEPLOYMENT (deployment name)
+      - AZURE_OPENAI_API_VERSION (optional; default will be used if not set)
+    """
+    # Build prompt (similar to your Ollama prompt)
+    prompt = f"""
 You are a data extractor for commercial real estate monthly cash flow CSVs.
-Read the CSV text and extract monthly cash flow data from the Monthly CF sheet.
-Return ONLY a JSON object that conforms to the following schema keys. Use numbers for numeric fields and arrays for monthly data:
+Read the CSV text and extract the requested values and monthly arrays.
+Return ONLY a single JSON object that complies with the following pydantic schema keys:
+{json.dumps(RealEstateSummary.model_json_schema(), indent=0)}
 
-LP EQUITY AND GP EQUITY ARE FOUND IN THE WATERFALL SHEET.
-
-(Advise: 'LP'='Limited Partner' and 'GP'='General Partner')
-
-MONTHLY CASH FLOW DATA:
-gross_potential_rent_monthly (“Gross Potential Rent”, “GPR”)
-vacancy_monthly (“Physical Vacancy”, “Vacancy Loss”, negative)
-bad_debt_monthly (“Bad Debt”, “Credit Loss”, negative)
-other_income_monthly (“Total Other Income”, “Other Income”)
-effective_gross_revenue_monthly (“Effective Gross Revenue”, “EGR”)
-total_expenses_monthly (“Total Expenses”, “Operating Expenses”, negative)
-net_operating_income_monthly (“Net Operating Income”, “NOI”)
-interest_payment_monthly (“Interest Payment”, “Debt Interest”, negative)
-principal_payment_monthly (“Principal Payment”, “Debt Principal”, negative)
-cash_flow_after_debt_service_monthly (“Cash Flow After Debt Service”, “CFADS”)
-
-ACQUISITION & COSTS:
-purchase_price (“Purchase Price”, “Acquisition Price”, “Property Purchase”)
-closing_costs (“Closing Costs”, “Transaction Costs”)
-acquisition_fee (“Acquisition Fee”, “Sponsor Fee”)
-upfront_wc (“Working Capital Contributed”, “Initial Working Capital”, “Upfront WC”)
-construction_budget (“Construction Expenses”, “Total Construction Budget”, “CapEx Budget”)
-hold_period_months (“Hold Period”, “Investment Duration”)
-LOAN INFORMATION:
-loan_amount (“Loan Funding”, “Debt Proceeds”, “Senior Loan”)
-loan_fee_amount (“Loan Fees”, “Financing Fees”, “Origination Fees”)
-interest_rate (“Interest Rate”, “Loan Rate”)
-io_period (“Interest-Only Period”, “IO Period”)
-amortization_years (“Amortization Term”, “Loan Amortization”)
-
-EQUITY & SALE:
-project_irr (“Project IRR”, “Project-level IRR”)
-lp_equity (“LP Equity”, “Limited Partner Equity”, “Investor Equity”)
-gp_equity (“GP Equity”, “General Partner Equity”, “Sponsor Equity”)
-exit_cap_rate (“Exit Cap Rate”, “Terminal Cap Rate”) (NOT TO BE CONFUSED WITH GOING-IN CAP RATE OR OTHER CAP RATES)
-sale_costs_pct (“Costs of Sale”, “Disposition Costs”, “Sales Costs Percentage”)
-
-If you cannot find a value, put null. Extract monthly data as arrays of numbers.
 CSV:
-{csv_text[:6000]}
+{csv_text[:15000]}
 """
-        response = chat(
-            messages=[{"role": "user", "content": prompt}],
-            model=model_name,
-            format=RealEstateSummary.model_json_schema()
-        )
 
-        # Ollama returns JSON in response.message.content per your example
-        raw = response.message.content
-        # Validate/parse into the pydantic model
-        summary_model = RealEstateSummary.model_validate_json(raw)
-        return summary_model
-    except Exception as e:
-        raise Exception(f"Ollama extraction failed: {e}")
+    # Read Azure credentials from environment (Streamlit will set these via st.secrets)
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    api_version = os.getenv("AZURE_OPENAI_API_VERSION")  # optional
+
+    if not (api_key and endpoint and deployment):
+        raise RuntimeError("Azure OpenAI credentials (AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT) must be set in environment.")
+
+    # Build client (use base_url that points to your resource path)
+    base_url = endpoint.rstrip("/") + "/openai/v1/"
+    client = OpenAI(api_key=api_key, base_url=base_url)  # matches Azure examples
+
+    # Call chat/completions (use deployment name as model)
+    resp = client.chat.completions.create(
+        model=deployment,
+        messages=[
+            {"role": "system", "content": "You are a JSON extractor that outputs only valid JSON."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.0,
+        max_tokens=4000,
+    )
+
+    # Get text result (new SDK uses choices[0].message.content)
+    raw_text = None
+    try:
+        raw_text = resp.choices[0].message.content
+    except Exception:
+        # Fallback: try response.output_text or .choices[0].text
+        raw_text = getattr(resp, "output_text", None) or (resp.choices[0].get("text") if resp.choices else None)
+
+    if not raw_text:
+        raise RuntimeError("Azure OpenAI returned no usable text. Check deployment and model response.")
+
+    # Validate JSON via pydantic
+    # If model returned JSON wrapped in markdown/code fences, strip them
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        # remove triple backticks and optional 'json'
+        cleaned = "\n".join(cleaned.splitlines()[1:-1])
+
+    # If Azure returns a JSON object string inside other text, attempt to find the first { ... }
+    if "{" in cleaned and "}" in cleaned:
+        first = cleaned.find("{")
+        last = cleaned.rfind("}")
+        cleaned = cleaned[first:last+1]
+
+    # Validate / parse using pydantic
+    summary_model = RealEstateSummary.model_validate_json(cleaned)
+    return summary_model
+
+
+
 
 def clean_currency(df):
     """Strip $, commas, and parentheses from all string cells and convert to float."""
@@ -561,7 +638,8 @@ if __name__ == "__main__":
 
     # 1) Use Ollama + pydantic schema to extract monthly cash flow data
     print("Extracting monthly cash flow data with ollama...")
-    summary_model = extract_summary_with_ollama(MCF_FILE, model_name="llama3.1")
+    # summary_model = extract_summary_with_ollama(MCF_FILE, model_name="llama3.1")
+    summary_model = extract_summary_with_azure_from_text(MCF_FILE)
 
     # 2) Build the pro forma from the validated model
     pro_forma = RealEstateProForma.from_summary_model(summary_model, MCF_FILE, WATERFALL_FILE)
