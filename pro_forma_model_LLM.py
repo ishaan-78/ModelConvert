@@ -149,6 +149,46 @@ def extract_summary_with_azure_from_text(csv_text: str) -> RealEstateSummary:
 You are a data extractor for commercial real estate monthly cash flow CSVs.
 Read the CSV text and extract the requested values and monthly arrays.
 Return ONLY a single JSON object that complies with the following pydantic schema keys:
+
+LP EQUITY AND GP EQUITY ARE FOUND IN THE WATERFALL SHEET.
+
+(Advise: 'LP'='Limited Partner' and 'GP'='General Partner')
+
+MONTHLY CASH FLOW DATA:
+gross_potential_rent_monthly (“Gross Potential Rent”, “GPR”)
+vacancy_monthly (“Physical Vacancy”, “Vacancy Loss”, negative)
+bad_debt_monthly (“Bad Debt”, “Credit Loss”, negative)
+other_income_monthly (“Total Other Income”, “Other Income”)
+effective_gross_revenue_monthly (“Effective Gross Revenue”, “EGR”)
+total_expenses_monthly (“Total Expenses”, “Operating Expenses”, negative)
+net_operating_income_monthly (“Net Operating Income”, “NOI”)
+interest_payment_monthly (“Interest Payment”, “Debt Interest”, negative)
+principal_payment_monthly (“Principal Payment”, “Debt Principal”, negative)
+cash_flow_after_debt_service_monthly (“Cash Flow After Debt Service”, “CFADS”)
+
+ACQUISITION & COSTS:
+purchase_price (“Purchase Price”, “Acquisition Price”, “Property Purchase”)
+closing_costs (“Closing Costs”, “Transaction Costs”)
+acquisition_fee (“Acquisition Fee”, “Sponsor Fee”)
+upfront_wc (“Working Capital Contributed”, “Initial Working Capital”, “Upfront WC”)
+construction_budget (“Construction Expenses”, “Total Construction Budget”, “CapEx Budget”)
+hold_period_months (“Hold Period”, “Investment Duration”)
+LOAN INFORMATION:
+loan_amount (“Loan Funding”, “Debt Proceeds”, “Senior Loan”)
+loan_fee_amount (“Loan Fees”, “Financing Fees”, “Origination Fees”)
+interest_rate (“Interest Rate”, “Loan Rate”)
+io_period (“Interest-Only Period”, “IO Period”)
+amortization_years (“Amortization Term”, “Loan Amortization”)
+
+EQUITY & SALE:
+project_irr (“Project IRR”, “Project-level IRR”)
+lp_equity (“LP Equity”, “Limited Partner Equity”, “Investor Equity”)
+gp_equity (“GP Equity”, “General Partner Equity”, “Sponsor Equity”)
+exit_cap_rate (“Exit Cap Rate”, “Terminal Cap Rate”) (NOT TO BE CONFUSED WITH GOING-IN CAP RATE OR OTHER CAP RATES)
+sale_costs_pct (“Costs of Sale”, “Disposition Costs”, “Sales Costs Percentage”)
+
+If you cannot find a value, put null. Extract monthly data as arrays of numbers.
+
 {json.dumps(RealEstateSummary.model_json_schema(), indent=0)}
 
 CSV:
